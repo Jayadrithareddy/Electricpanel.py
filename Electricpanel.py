@@ -85,7 +85,7 @@ st.markdown("""
         backdrop-filter: blur(10px);
     }
 </style>
-<div class="main-title">⚡ Smart Microgrid Panel SLD Generator</div>
+<div class="main-title"> Smart Microgrid Panel SLD Generator</div>
 """, unsafe_allow_html=True)
 
 # ---------------- INPUTS (Sidebar & Main) ----------------
