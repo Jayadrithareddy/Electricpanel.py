@@ -1,3 +1,5 @@
 streamlit
 reportlab
 svgwrite
+svglib
+lxml
