@@ -3,3 +3,4 @@ reportlab
 svgwrite
 cairosvg
 pillow
+svglib
