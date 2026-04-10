@@ -125,7 +125,7 @@ st.markdown("""
 
 # ---------------- INPUTS (Sidebar & Main) ----------------
 with st.sidebar:
-    st.header("⚙️ Design Parameters")
+    st.header("⚙️ Design Parameters") 
 
     with st.expander("Capacity Inputs", expanded=True):
         solar_kw   = st.number_input("Solar (kWp)",    value=100, min_value=0)
