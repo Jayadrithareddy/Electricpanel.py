@@ -3,6 +3,8 @@ import math
 import io
 import svgwrite as svg
 import base64
+import pandas as pd
+import datetime
 
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet
@@ -12,7 +14,22 @@ from svglib.svglib import svg2rlg
 from reportlab.graphics import renderPDF
 from reportlab.platypus import PageBreak
 from reportlab.pdfgen import canvas
-import datetime
+ 
+# ---------------- STANDARDS & CONSTANTS ----------------
+STANDARD_MCCBS = [16,20,25,32,40,50,63,80,100,125,160,200,250,315,400,500,630,800,1000,1250,1600,2000,2500]
+
+MCCB_DIMENSIONS = {
+    100: "150x75x130",
+    250: "200x105x160",
+    400: "255x140x180",
+    630: "320x210x200"
+}
+
+def get_standard_rating(val):
+    for r in STANDARD_MCCBS:
+        if r >= val:
+            return r
+    return STANDARD_MCCBS[-1]
 
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(page_title="Professional Microgrid SLD Generator", layout="wide")
@@ -60,21 +77,23 @@ st.markdown("""
         font-size: 14px !important;
         opacity: 1 !important;
     }
-    .stButton>button {
-        background: linear-gradient(90deg, #19988b, #15803d);
-        color: white;
-        border: none;
-        padding: 12px 30px;
-        font-size: 16px;
-        border-radius: 8px;
-        font-weight: 700;
-        transition: all 0.3s ease;
-        box-shadow: 0 4px 15px rgba(25, 152, 139, 0.3);
+    .stButton>button, [data-testid="stDownloadButton"]>button {
+        background: linear-gradient(90deg, #19988b, #15803d) !important;
+        color: white !important;
+        border: none !important;
+        padding: 12px 30px !important;
+        font-size: 16px !important;
+        border-radius: 8px !important;
+        font-weight: 700 !important;
+        transition: none !important;
+        box-shadow: 0 4px 15px rgba(25, 152, 139, 0.3) !important;
     }
-    .stButton>button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 20px rgba(25, 152, 139, 0.5);
-        background: linear-gradient(90deg, #187e6c, #19988b);
+    .stButton>button:hover, .stButton>button:active, .stButton>button:focus,
+    [data-testid="stDownloadButton"]>button:hover, [data-testid="stDownloadButton"]>button:active, [data-testid="stDownloadButton"]>button:focus {
+        background: linear-gradient(90deg, #19988b, #15803d) !important;
+        color: white !important;
+        transform: none !important;
+        box-shadow: 0 4px 15px rgba(25, 152, 139, 0.3) !important;
     }
     .result-card {
         background: rgba(6, 42, 48, 0.8);
@@ -125,7 +144,7 @@ st.markdown("""
 
 # ---------------- INPUTS (Sidebar & Main) ----------------
 with st.sidebar:
-    st.header("⚙️ Design Parameters") 
+    st.header("⚙️ Design Parameters")
 
     with st.expander("Capacity Inputs", expanded=True):
         solar_kw   = st.number_input("Solar (kWp)",    value=100, min_value=0)
@@ -155,23 +174,26 @@ with st.sidebar:
                 out_r = st.number_input(
                     f"O/G {i+1} Rating (Amp)", value=default_val, key=f"og_in_{i}", min_value=0
                 )
-                mccb_outputs.append(out_r)
+                mccb_outputs.append(get_standard_rating(out_r))
 
         busbar_material = st.selectbox("Busbar Material", ["Copper", "Aluminium"], index=1)
-        num_poles       = st.selectbox("System Phases/Poles", [1, 2, 3, 4, 5], index=2)
+        num_poles       = st.selectbox("System Phases/Poles", [3, 4], index=1)
 
     st.divider()
     submit = st.button("Generate Final SLD & BOM", use_container_width=True)
 
 # ---------------- CORE CALCULATIONS ----------------
-STANDARD_MCCBS = [16,20,25,32,40,50,63,80,100,125,160,200,250,315,400,500,630,800,1000,1250,1600]
-
+ 
 def get_mccb_rating(current):
     required = current * 1.25
     for rating in STANDARD_MCCBS:
         if rating >= required:
             return rating
     return STANDARD_MCCBS[-1]
+
+def get_mccb_dims(rating):
+    # Try to find an exact match first, otherwise check nearest standard rating
+    return MCCB_DIMENSIONS.get(rating, "")
 
 V  = 415
 PF = 0.8
@@ -185,7 +207,7 @@ mccb_grid = get_mccb_rating(i_grid) if grid_kw > 0 else 0
 dg_mccbs    = []
 dg_currents = []
 for dg in dg_ratings:
-    i = (dg * 1000) / (math.sqrt(3) * V * PF)
+    i = (dg * 1000) / (math.sqrt(3) * V)
     dg_currents.append(i)
     dg_mccbs.append(get_mccb_rating(i))
 
@@ -196,7 +218,7 @@ busbar_area = total_busbar_current / density
 suggested_width = math.ceil(busbar_area / 10 / 5) * 5
 if suggested_width < 20:
     suggested_width = 20
-busbar_spec = f"{suggested_width} x 10 mm {busbar_material}"
+busbar_spec = f"1 Set ({suggested_width} x 20 mm {busbar_material})"
 
 total_outgoing_rating = sum(mccb_outputs)
 
@@ -215,7 +237,7 @@ def draw_mccb(dwg, x, y, rating, poles, label, side="left"):
     else:
         info_x, anchor        = x + 25, "start"
         label_x, label_anchor = x - 35, "end"
-    dwg.add(dwg.text(f"{rating}A, {poles}P", insert=(info_x, y - 5),
+    dwg.add(dwg.text(f"{rating} A, {poles}pole,", insert=(info_x, y - 5),
                      font_size=12, fill="#e2e8f0", text_anchor=anchor, font_family="Arial"))
     dwg.add(dwg.text("Motorised MCCB",       insert=(info_x, y + 12),
                      font_size=11, fill="#94a3b8", text_anchor=anchor, font_family="Arial"))
@@ -224,69 +246,99 @@ def draw_mccb(dwg, x, y, rating, poles, label, side="left"):
                      text_anchor=label_anchor, font_family="Arial"))
 
 def draw_tower(dwg, x, y):
-    h = 60
-    dwg.add(dwg.line((x,      y),      (x - 15, y + h), stroke="white", stroke_width=2))
-    dwg.add(dwg.line((x,      y),      (x + 15, y + h), stroke="white", stroke_width=2))
-    dwg.add(dwg.line((x - 15, y + h),  (x + 15, y + h), stroke="white", stroke_width=2))
-    dwg.add(dwg.line((x - 10, y + 25), (x + 10, y + 25), stroke="white", stroke_width=1.5))
-    dwg.add(dwg.line((x - 12, y + 45), (x + 12, y + 45), stroke="white", stroke_width=1.5))
+    h = 90
+    w = 25
+    # Lattice Pylon structure
+    # Main legs
+    dwg.add(dwg.line((x, y - 5), (x - w, y + h), stroke="white", stroke_width=2))
+    dwg.add(dwg.line((x, y - 5), (x + w, y + h), stroke="white", stroke_width=2))
+    # Base
+    dwg.add(dwg.line((x - w, y + h), (x + w, y + h), stroke="white", stroke_width=2))
+    # Cross arms (shorter at top, wider at middle)
+    arm_y = [y + 15, y + 40, y + 65]
+    arm_w = [18, 28, 24]
+    for i in range(3):
+        dwg.add(dwg.line((x - arm_w[i], arm_y[i]), (x + arm_w[i], arm_y[i]), stroke="white", stroke_width=2))
+        # Insulators (small vertical bits at arm ends)
+        dwg.add(dwg.line((x - arm_w[i], arm_y[i]), (x - arm_w[i], arm_y[i] + 8), stroke="white", stroke_width=1.2))
+        dwg.add(dwg.line((x + arm_w[i], arm_y[i]), (x + arm_w[i], arm_y[i] + 8), stroke="white", stroke_width=1.2))
+    # Internal lattice bracing (X-pattern)
+    for i in range(len(arm_y) - 1):
+        y1, y2 = arm_y[i], arm_y[i+1]
+        w1, w2 = arm_w[i], arm_w[i+1]
+        dwg.add(dwg.line((x - w1, y1), (x + w2, y2), stroke="white", stroke_width=0.8, stroke_opacity=0.4))
+        dwg.add(dwg.line((x + w1, y1), (x - w2, y2), stroke="white", stroke_width=0.8, stroke_opacity=0.4))
 
 def draw_solar(dwg, x, y):
-    dwg.add(dwg.rect(insert=(x - 20, y + 10), size=(40, 45),
-                     fill="#1e293b", stroke="white", stroke_width=1.5))
+    # Panel in perspective (Trapezoid)
+    dwg.add(dwg.path(
+        d=f"M{x-20},{y+55} L{x+20},{y+55} L{x+30},{y+20} L{x-30},{y+20} Z",
+        fill="#1e293b", stroke="white", stroke_width=2
+    ))
+    # Grid lines on panel
     for i in range(1, 4):
-        dwg.add(dwg.line((x - 20, y + 10 + i * 11), (x + 20, y + 10 + i * 11),
-                         stroke="white", stroke_opacity=0.5))
-        dwg.add(dwg.line((x - 20 + i * 10, y + 10),  (x - 20 + i * 10, y + 55),
-                         stroke="white", stroke_opacity=0.5))
-    dwg.add(dwg.circle(center=(x - 30, y - 5), r=8,
-                       stroke="#fbbf24", fill="none", stroke_width=2))
+        h_y = y + 20 + i * (35 / 4)
+        dwg.add(dwg.line((x - 30 + i*2.5, h_y), (x + 30 - i*2.5, h_y), stroke="white", stroke_opacity=0.4))
+    dwg.add(dwg.line((x, y+20), (x, y+55), stroke="white", stroke_opacity=0.4))
+    dwg.add(dwg.line((x-10, y+20), (x-8, y+55), stroke="white", stroke_opacity=0.4))
+    dwg.add(dwg.line((x+10, y+20), (x+8, y+55), stroke="white", stroke_opacity=0.4))
+    
+    # Sun with rays
+    cx, cy = x - 25, y - 5
+    dwg.add(dwg.circle(center=(cx, cy), r=10, stroke="#fbbf24", fill="none", stroke_width=2.5))
+    for i in range(8):
+        angle = i * 45
+        import math
+        r1, r2 = 12, 17
+        x1 = cx + r1 * math.cos(math.radians(angle))
+        y1 = cy + r1 * math.sin(math.radians(angle))
+        x2 = cx + r2 * math.cos(math.radians(angle))
+        y2 = cy + r2 * math.sin(math.radians(angle))
+        dwg.add(dwg.line((x1, y1), (x2, y2), stroke="#fbbf24", stroke_width=1.5))
 
 def draw_mgc(dwg, x, y):
     size = 100
+    # Outer frame
     dwg.add(dwg.rect(insert=(x, y), size=(size, size),
-                     fill="#1e1b4b", stroke="#a78bfa", stroke_width=3, rx=10))
-    for i in range(5):
-        off = 18 + i * 16
-        dwg.add(dwg.line((x + off,    y - 10),        (x + off,    y),             stroke="#a78bfa", stroke_width=2))
-        dwg.add(dwg.line((x + off,    y + size),       (x + off,    y + size + 10), stroke="#a78bfa", stroke_width=2))
-        dwg.add(dwg.line((x - 10,     y + off),        (x,          y + off),       stroke="#a78bfa", stroke_width=2))
-        dwg.add(dwg.line((x + size,   y + off),        (x + size + 10, y + off),    stroke="#a78bfa", stroke_width=2))
+                     fill="#1e1b4b", stroke="#a78bfa", stroke_width=3, rx=8))
+    # Inner board
+    dwg.add(dwg.rect(insert=(x + 15, y + 15), size=(70, 70),
+                     fill="none", stroke="#a78bfa", stroke_width=2))
+    
+    # 6 Pins on each side
+    pin_len = 12
+    spacing = size / 7
+    for i in range(1, 7):
+        pos = i * spacing
+        # Top
+        dwg.add(dwg.line((x + pos, y - pin_len), (x + pos, y), stroke="#a78bfa", stroke_width=2.5))
+        # Bottom
+        dwg.add(dwg.line((x + pos, y + size), (x + pos, y + size + pin_len), stroke="#a78bfa", stroke_width=2.5))
+        # Left
+        dwg.add(dwg.line((x - pin_len, y + pos), (x, y + pos), stroke="#a78bfa", stroke_width=2.5))
+        # Right
+        dwg.add(dwg.line((x + size, y + pos), (x + size + pin_len, y + pos), stroke="#a78bfa", stroke_width=2.5))
+
     dwg.add(dwg.text("MGC", insert=(x + size / 2, y + size / 2 + 8),
                      font_size=20, fill="white", font_weight="bold", text_anchor="middle"))
 
 # ── DYNAMIC CANVAS SIZING ─────────────────────────────────────────────────────
 def compute_canvas(n_dg, g_kw, s_kw, n_out):
-    """
-    Calculates canvas width, height, and column spacings so the diagram
-    always fits every incomer and every outgoing feeder without overlap,
-    regardless of how many the user chooses.
-    """
     n_incomers = int(n_dg) + (1 if g_kw > 0 else 0) + (1 if s_kw > 0 else 0)
     n_incomers = max(n_incomers, 1)
     n_out      = max(int(n_out), 1)
 
-    # Minimum px per column so labels / symbols never collide
-    MIN_COL    = 280
-    MARGIN_L   = 150   # left edge buffer
-    MARGIN_R   = 200   # right edge buffer (MGC box needs ~160 px)
+    MIN_COL    = 250
+    MARGIN_L   = 100
+    MARGIN_R   = 120
 
-    # Raw width needed to fit each row independently
-    inc_raw = MARGIN_L + n_incomers * MIN_COL + MARGIN_R
-    out_raw = MARGIN_L + n_out      * MIN_COL + MARGIN_R
+    width = MARGIN_L + max(n_incomers, n_out + 0.5) * MIN_COL + MARGIN_R
+    width = max(width, 950)
 
-    width = max(inc_raw, out_raw, 900)   # never smaller than 900 px
-
-    # Distribute columns evenly across usable width
-    usable_inc = width - MARGIN_L - MARGIN_R
-    usable_out = width - MARGIN_L - MARGIN_R
-    inc_spacing = max(MIN_COL, usable_inc // n_incomers)
-    out_spacing = max(MIN_COL, usable_out // n_out)
-
-    # Height: fixed rhythm; grows when output labels need more vertical room
-    height = 950
-
-    return int(width), int(height), int(inc_spacing), int(out_spacing), int(MARGIN_L)
+    # Distribute columns
+    inc_spacing = MIN_COL
+    out_spacing = MIN_COL
+    return int(width), 950, int(inc_spacing), int(out_spacing), int(MARGIN_L + 60)
 
 
 # ---------------- MAIN UI LOGIC ----------------
@@ -333,30 +385,32 @@ if submit:
                          fill="#020617", stroke="#334155", stroke_width=2, rx=15))
 
         # Proportional vertical landmarks
-        y_division = int(height * 0.42)   # ~399 px at h=950
-        y_sources  = int(height * 0.19)   # ~180 px
-        y_busbar   = int(height * 0.67)   # ~636 px
+        y_division = int(height * 0.40)   # ~380 px at h=950
+        y_sources  = int(height * 0.17)   # ~160 px
+        y_busbar   = int(height * 0.58)   # ~551 px (Tightened from 0.67)
 
         # Scope divider
         dwg.add(dwg.line((30, y_division), (width - 30, y_division),
                          stroke="#475569", stroke_width=1, stroke_dasharray="8,4"))
-        dwg.add(dwg.text("CUSTOMER SCOPE",
+        dwg.add(dwg.text("Customer Scope",
                          insert=(width / 2, 50),
                          font_size=20, font_weight="bold", fill="#94a3b8", text_anchor="middle"))
-        dwg.add(dwg.text("KIRLOSKAR SCOPE",
+        dwg.add(dwg.text("Kirloskar Scope",
                          insert=(50, height - 40),
                          font_size=20, font_weight="bold", fill="#94a3b8"))
         dwg.add(dwg.text("Smart AMF Panel",
                          insert=(width - 220, height - 40),
                          font_size=18, fill="#6366f1"))
 
-        # MGC — anchored to right side, below divider
+        # MGC — anchored to right side
         mgc_x = width - 155
-        mgc_y = y_division + 10
+        # Align MGC top-third with the trunk (comm_y = y_division + 25)
+        # mgc_pin_y = mgc_y + 42.8  ->  y_div + 25 = mgc_y + 42.8
+        mgc_y = y_division - 18
         draw_mgc(dwg, mgc_x, mgc_y)
         dwg.add(dwg.text("Auto / Manual",
-                         insert=(mgc_x - 10, mgc_y + 30),
-                         font_size=13, fill="#cbd5e1", text_anchor="end"))
+                         insert=(mgc_x + 50, mgc_y - 15),
+                         font_size=13, fill="#cbd5e1", text_anchor="middle"))
 
         current_x    = x_init
         active_ics_x = []
@@ -373,15 +427,8 @@ if submit:
             dwg.add(dwg.text(f"DG {i+1}",
                              insert=(cx, y_sources + 7),
                              font_size=15, fill="white", text_anchor="middle"))
-            # wire → synch controller → MCCB → busbar
-            dwg.add(dwg.line((cx, y_sources + 45), (cx, y_division - 100),
-                             stroke="white", stroke_width=2))
-            dwg.add(dwg.rect(insert=(cx - 65, y_division - 100), size=(130, 40),
-                             fill="#1e293b", stroke="#60a5fa", rx=5))
-            dwg.add(dwg.text("Synch Controller",
-                             insert=(cx, y_division - 75),
-                             font_size=12, fill="white", text_anchor="middle"))
-            dwg.add(dwg.line((cx, y_division - 60), (cx, y_division + 40),
+            # wire → MCCB → busbar
+            dwg.add(dwg.line((cx, y_sources + 45), (cx, y_division + 50),
                              stroke="white", stroke_width=2))
             draw_mccb(dwg, cx, y_division + 100, dg_mccbs[i], num_poles, f"I/C {ic_index}", "left")
             dwg.add(dwg.line((cx, y_division + 150), (cx, y_busbar),
@@ -398,7 +445,7 @@ if submit:
                              insert=(cx, y_sources - 85),
                              font_size=16, font_weight="bold", fill="white", text_anchor="middle"))
             draw_tower(dwg, cx, y_sources - 30)
-            dwg.add(dwg.line((cx, y_sources + 30), (cx, y_division + 40),
+            dwg.add(dwg.line((cx, y_sources + 30), (cx, y_division + 50),
                              stroke="white", stroke_width=2))
             draw_mccb(dwg, cx, y_division + 100, mccb_grid, num_poles, f"I/C {ic_index}", "left")
             dwg.add(dwg.line((cx, y_division + 150), (cx, y_busbar),
@@ -414,48 +461,89 @@ if submit:
                              insert=(cx, y_sources - 85),
                              font_size=16, font_weight="bold", fill="white", text_anchor="middle"))
             draw_solar(dwg, cx, y_sources - 30)
-            dwg.add(dwg.line((cx, y_sources + 25), (cx, y_division + 40),
+            dwg.add(dwg.line((cx, y_sources + 25), (cx, y_division + 50),
                              stroke="white", stroke_width=2))
             draw_mccb(dwg, cx, y_division + 100, mccb_solar, num_poles, f"I/C {ic_index}", "left")
             dwg.add(dwg.line((cx, y_division + 150), (cx, y_busbar),
                              stroke="white", stroke_width=2))
             active_ics_x.append(cx)
 
-        # ── Main Busbar ───────────────────────────────────────────────────────
-        dwg.add(dwg.line((80, y_busbar), (width - 80, y_busbar),
+        # ── Main Busbar with Pole Hashing ─────────────────────────────────────
+        dwg.add(dwg.line((40, y_busbar), (width - 40, y_busbar),
                          stroke="#ef4444", stroke_width=7))
-        dwg.add(dwg.text("MAIN BUSBAR",
-                         insert=(100, y_busbar - 12),
-                         font_size=13, fill="#f87171"))
+        
+        # Diagonal Hashing lines for poles (instead of 'MAIN BUSBAR' text)
+        hash_start_x = 60
+        for p in range(int(num_poles)):
+            # Draw a diagonal line crossing the busbar
+            dwg.add(dwg.line((hash_start_x + p*7, y_busbar + 12), 
+                             (hash_start_x + p*7 + 8, y_busbar - 12),
+                             stroke="white", stroke_width=1.5))
+        
         dwg.add(dwg.text(f"{total_busbar_current:.1f}A",
-                         insert=(width - 100, y_busbar - 12),
+                         insert=(width - 50, y_busbar - 12),
                          font_size=13, fill="#f87171", text_anchor="end"))
 
-        # ── Communication Lines ───────────────────────────────────────────────
+        # ── Communication Line Trunks & Branches ───────────────────────────────
         if active_ics_x:
-            comm_y = y_division - 20
-            dwg.add(dwg.line((active_ics_x[0], comm_y), (mgc_x, comm_y),
+            # Trunk inside Kirloskar scope, above I/C MCCBs
+            comm_y = y_division + 25
+            # Top trunk
+            dwg.add(dwg.line((active_ics_x[0], comm_y), (mgc_x - 12, comm_y),
                              stroke="#a78bfa", stroke_width=1.2, stroke_dasharray="6,3"))
-            dwg.add(dwg.text("Communication and Control Lines",
-                             insert=(width / 2, comm_y - 14),
-                             font_size=13, fill="#c4b5fd", text_anchor="middle"))
+            # Vertical drops from each incomer source to the comm trunk
             for ax in active_ics_x:
-                dwg.add(dwg.line((ax, comm_y), (ax, y_division + 40),
+                dwg.add(dwg.line((ax, comm_y), (ax, y_division + 50),
                                  stroke="#a78bfa", stroke_width=1, stroke_dasharray="4,2"))
-            dwg.add(dwg.line((mgc_x, comm_y), (mgc_x, mgc_y + 25),
-                             stroke="#a78bfa", stroke_width=1, stroke_dasharray="6,3"))
+            
+            # Bottom trunk
+            n_out       = int(num_outputs)
+            x_out_start = x_init + (inc_spacing / 2)
+            mgc_pin_x   = mgc_x + (3 * (100 / 7))
+            comm_y_bottom = y_busbar + 160
+            
+            dwg.add(dwg.line((x_out_start, comm_y_bottom), (mgc_pin_x, comm_y_bottom),
+                             stroke="#a78bfa", stroke_width=1.2, stroke_dasharray="6,3"))
+            dwg.add(dwg.line((mgc_pin_x, mgc_y + 112), (mgc_pin_x, comm_y_bottom),
+                             stroke="#a78bfa", stroke_width=1.2, stroke_dasharray="6,3"))
+            # Vertical branches for outgoers
+            for i in range(n_out):
+                ox = x_out_start + i * inc_spacing
+                if ox > (mgc_x - 50): break
+                dwg.add(dwg.line((ox, comm_y_bottom), (ox, y_busbar + 125),
+                                 stroke="#a78bfa", stroke_width=1, stroke_dasharray="4,2"))
 
-        # ── Outgoing Feeders — centred across the full canvas width ───────────
-        n_out           = int(num_outputs)
-        total_out_span  = (n_out - 1) * out_spacing
-        x_out_start     = max(80, (width - total_out_span) // 2)
-
+        # ── Outgoing Feeders — Interlaced between Incomer columns ─────────────
+        n_out       = int(num_outputs)
+        x_out_start = x_init + (inc_spacing / 2)
+        
         for i in range(n_out):
-            ox     = x_out_start + i * out_spacing
+            ox = x_out_start + i * inc_spacing
+            # Safety break to avoid drawing over MGC
+            if ox > (mgc_x - 50):
+                break
             rating = mccb_outputs[i] if i < len(mccb_outputs) else 250
-            dwg.add(dwg.line((ox, y_busbar),       (ox, y_busbar + 40),  stroke="white", stroke_width=2))
-            draw_mccb(dwg, ox, y_busbar + 100, rating, num_poles, f"O/G {i+1}", "right")
-            dwg.add(dwg.line((ox, y_busbar + 150), (ox, height - 80),    stroke="white", stroke_width=2))
+            dwg.add(dwg.line((ox, y_busbar),       (ox, y_busbar + 25),  stroke="white", stroke_width=2))
+            draw_mccb(dwg, ox, y_busbar + 75, rating, num_poles, f"O/G {i+1}", "right")
+            dwg.add(dwg.line((ox, y_busbar + 125), (ox, height - 80),    stroke="white", stroke_width=2))
+
+        # --- FINAL PASS: Communication Labels (Draw on top of power lines to mask them) ---
+        if active_ics_x:
+            label_text = "Communication and Control Lines"
+            comm_y = y_division + 25
+            comm_y_bottom = y_busbar + 160
+            
+            # Top Label mask
+            dwg.add(dwg.rect(insert=(width / 2 - 120, comm_y - 12), size=(240, 24),
+                             fill="#020617", stroke="none"))
+            dwg.add(dwg.text(label_text, insert=(width / 2, comm_y + 6),
+                             font_size=13, fill="#c4b5fd", text_anchor="middle"))
+            
+            # Bottom Label mask
+            dwg.add(dwg.rect(insert=(width / 2 - 120, comm_y_bottom - 12), size=(240, 24),
+                             fill="#020617", stroke="none"))
+            dwg.add(dwg.text(label_text, insert=(width / 2, comm_y_bottom + 6),
+                             font_size=13, fill="#c4b5fd", text_anchor="middle"))
 
         return dwg.tostring(), width, height
 
@@ -465,7 +553,7 @@ if submit:
     sld_svg, svg_width, svg_height = generate_sld()
     b64 = base64.b64encode(sld_svg.encode("utf-8")).decode("utf-8")
     st.markdown(
-        f'<div style="background:#020617;padding:20px;border-radius:15px;border:1px solid #334155;">'
+        f'<div style="background:#020617;padding:20px;border-radius:15px;border:1px solid #334155;margin-bottom:35px;">'
         f'<img src="data:image/svg+xml;base64,{b64}" style="width:100%;"></div>',
         unsafe_allow_html=True,
     )
@@ -570,7 +658,7 @@ if submit:
             f"<b>Total Outgoing Capacity:</b> {total_outgoing_rating:.0f}A<br/>"
             f"<b>Recommended Busbar:</b> {busbar_spec}<br/>"
             f"<b>System Configuration:</b> {int(num_poles)}-Phase, {int(num_outputs)} Outgoing Feeders<br/>"
-            f"<b>Auto-computed Canvas:</b> {svg_width} × {svg_height} px"
+            
         )
         if warning_flag:
             specs_text += (
@@ -609,22 +697,43 @@ if submit:
         story.append(Paragraph("4. Bill Of Material (BOM)", h2_style))
         story.append(Spacer(1, 8))
 
-        table_data = [["Sr No", "Component / Description", "Rating", "Poles", "Qty"]]
-        sr = 1
+        # BOM Data Construction
+        bom_items = []
         if solar_kw > 0:
-            table_data.append([str(sr), "Solar Incomer MCCB",  f"{mccb_solar}A", f"{num_poles}P", "1"]); sr += 1
+            bom_items.append({"desc": "Solar Incomer MCCB", "rating": f"{mccb_solar}A", "poles": f"{num_poles}P", "qty": "1", "uom": "Nos"})
         if grid_kw > 0:
-            table_data.append([str(sr), "Grid Incomer MCCB",   f"{mccb_grid}A",  f"{num_poles}P", "1"]); sr += 1
-        for i, r in enumerate(dg_mccbs):
-            table_data.append([str(sr), f"DG {i+1} Incomer MCCB", f"{r}A", f"{num_poles}P", "1"]); sr += 1
-        for i, r in enumerate(mccb_outputs):
-            table_data.append([str(sr), f"Outgoing Feeder (O/G {i+1})", f"{int(r)}A", f"{num_poles}P", "1"]); sr += 1
-        table_data.append([str(sr), f"{busbar_material} Main Busbar",
-                           f"{total_busbar_current:.1f}A Rated", "-", f"1 Set ({busbar_spec})"]); sr += 1
-        table_data.append([str(sr), "Microgrid Controller (MGC)", "Standard", "-", "1"])
+            bom_items.append({"desc": "Grid Incomer MCCB", "rating": f"{mccb_grid}A", "poles": f"{num_poles}P", "qty": "1", "uom": "Nos"})
+        
+        # Group DGs if they have same rating
+        if num_dg > 0:
+            from collections import Counter
+            dg_counts = Counter(dg_mccbs)
+            for r, count in dg_counts.items():
+                label = "DG Incomer MCCB" if len(dg_counts) == 1 else f"DG Incomer MCCB ({r}A)"
+                bom_items.append({"desc": label, "rating": f"{r}A", "poles": f"{num_poles}P", "qty": str(count), "uom": "Nos"})
+        
+        # Group Feeders
+        if num_outputs > 0:
+            from collections import Counter
+            out_counts = Counter(mccb_outputs)
+            for r, count in out_counts.items():
+                bom_items.append({"desc": f"Outgoing Feeder MCCB ({int(r)}A)", "rating": f"{int(r)}A", "poles": f"{num_poles}P", "qty": str(count), "uom": "Nos"})
 
-        # Optimized column widths: SrNo(30), Desc(150), Rating(90), Poles(45), Qty(190)
-        table = Table(table_data, colWidths=[30, 150, 90, 45, 190])
+        # Busbar and MGC
+        bom_items.append({"desc": f"{busbar_material} Main Busbar", "rating": f"{total_busbar_current:.1f}A Rated", "poles": "-", "qty": busbar_spec, "uom": "-"})
+        bom_items.append({"desc": "Microgrid Controller (MGC)", "rating": "Standard", "poles": "-", "qty": "1", "uom": "Nos"})
+
+        # Cables and Enclosure (Moved below MGC)
+        bom_items.append({"desc": "Control Cable", "rating": "1.5 sqmm", "poles": "-", "qty": "100", "uom": "Meters"})
+        bom_items.append({"desc": "Power/Consumable Cable", "rating": "Varied", "poles": "-", "qty": "50", "uom": "Meters"})
+        bom_items.append({"desc": "Enclosure (Panel Body)", "rating": "Standard IP54", "poles": "-", "qty": "1", "uom": "Set"})
+
+        table_data = [["Sr No", "Component / Description", "Rating", "Poles", "Qty", "UOM"]]
+        for i, item in enumerate(bom_items):
+            table_data.append([str(i+1), item["desc"], item["rating"], item["poles"], item["qty"], item["uom"]])
+
+        # Adjusted column widths for 6 columns to fit the long Busbar Qty string: SrNo(30), Desc(160), Rating(75), Poles(40), Qty(150), UOM(50)
+        table = Table(table_data, colWidths=[30, 160, 75, 40, 150, 50])
         table.setStyle(TableStyle([
             ("BACKGROUND",    (0, 0), (-1, 0),  colors.HexColor("#19988b")),
             ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.whitesmoke),
@@ -649,19 +758,79 @@ if submit:
         )
         story.append(Paragraph(notes, normal_style))
 
-        story.append(Paragraph(notes, normal_style))
-
         doc.build(story, canvasmaker=NumberedCanvas)
         buffer.seek(0)
         return buffer
 
     pdf_buffer = generate_pdf_report()
-    st.download_button(
-        label="📄 Download Technical Report (PDF)",
-        data=pdf_buffer,
-        file_name="Microgrid_Panel_Technical_Report.pdf",
-        mime="application/pdf",
-    )
+    
+    # ── 3.5 EXCEL BOM GENERATOR ──────────────────────────────────────────────
+    def generate_excel_bom():
+        bom_items = []
+        if solar_kw > 0:
+            bom_items.append({"Description": "Solar Incomer MCCB", "Rating": f"{mccb_solar}A", "Poles": f"{num_poles}P", "Qty": 1, "UOM": "Nos"})
+        if grid_kw > 0:
+            bom_items.append({"Description": "Grid Incomer MCCB", "Rating": f"{mccb_grid}A", "Poles": f"{num_poles}P", "Qty": 1, "UOM": "Nos"})
+        
+        if num_dg > 0:
+            from collections import Counter
+            dg_counts = Counter(dg_mccbs)
+            for r, count in dg_counts.items():
+                label = "DG Incomer MCCB" if len(dg_counts) == 1 else f"DG Incomer MCCB ({r}A)"
+                bom_items.append({"Description": label, "Rating": f"{r}A", "Poles": f"{num_poles}P", "Qty": count, "UOM": "Nos"})
+        
+        if num_outputs > 0:
+            from collections import Counter
+            out_counts = Counter(mccb_outputs)
+            for r, count in out_counts.items():
+                bom_items.append({"Description": f"Outgoing Feeder MCCB ({int(r)}A)", "Rating": f"{int(r)}A", "Poles": f"{num_poles}P", "Qty": count, "UOM": "Nos"})
+
+        bom_items.append({"Description": f"{busbar_material} Main Busbar", "Rating": f"{total_busbar_current:.1f}A Rated", "Poles": "-", "Qty": busbar_spec, "UOM": "-"})
+        bom_items.append({"Description": "Microgrid Controller (MGC)", "Rating": "Standard", "Poles": "-", "Qty": 1, "UOM": "Nos"})
+
+        # Cables and Enclosure (Moved below MGC)
+        bom_items.append({"Description": "Control Cable", "Rating": "1.5 sqmm", "Poles": "-", "Qty": 100, "UOM": "Meters"})
+        bom_items.append({"Description": "Power/Consumable Cable", "Rating": "Varied", "Poles": "-", "Qty": 50, "UOM": "Meters"})
+        bom_items.append({"Description": "Enclosure (Panel Body)", "Rating": "Standard IP54", "Poles": "-", "Qty": 1, "UOM": "Set"})
+
+        df = pd.DataFrame(bom_items)
+        df.insert(0, "Sr No", range(1, len(df) + 1))
+        
+        # Add Dimensions column mapping based on rating
+        def map_dims(row):
+            if "MCCB" in row["Description"]:
+                try:
+                    r_val = int(''.join(filter(str.isdigit, row["Rating"])))
+                    return get_mccb_dims(r_val)
+                except: return ""
+            return ""
+        
+        df["Dimensions (mm)"] = df.apply(map_dims, axis=1)
+        
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="BOM")
+        return output.getvalue()
+
+    excel_data = generate_excel_bom()
+
+    col_dl1, col_dl2 = st.columns(2)
+    with col_dl1:
+        st.download_button(
+            label="📄 Download Technical Report (PDF)",
+            data=pdf_buffer,
+            file_name="Microgrid_Panel_Technical_Report.pdf",
+            mime="application/pdf",
+            use_container_width=True
+        )
+    with col_dl2:
+        st.download_button(
+            label="📊 Download BOM (Excel)",
+            data=excel_data,
+            file_name="Microgrid_Panel_BOM.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
 
     # ── 4. Summary metrics ────────────────────────────────────────────────────
     st.divider()
